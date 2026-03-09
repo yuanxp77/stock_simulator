@@ -9,6 +9,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
 from datetime import datetime
+from itertools import product
 import logging
 import os
 import platform
@@ -368,6 +369,115 @@ class StockBacktestSystem:
                            'sharpe_ratio', 'win_rate', 'score']].to_dict('records'),
         }
 
+    # ── 参数网格搜索优化 ──
+
+    def optimize_params(self):
+        """遍历每个策略的参数搜索空间，找到夏普比率最高的参数组合"""
+        start_date = config.START_DATE
+        end_date = config.END_DATE or datetime.now().strftime('%Y-%m-%d')
+        initial_capital = config.INITIAL_CAPITAL
+        position_ratio = config.POSITION_RATIO
+        stock_codes = [s['code'] for s in config.STOCKS]
+
+        try:
+            all_data = pd.read_csv('data/stock_data.csv', dtype={'stock_code': str})
+            all_data['date'] = pd.to_datetime(all_data['date'])
+            all_data = all_data[(all_data['date'] >= start_date) &
+                                (all_data['date'] <= end_date)].sort_values('date')
+        except FileNotFoundError:
+            logger.error("数据文件不存在，请先获取数据")
+            return {}
+
+        available_codes = all_data['stock_code'].unique().tolist()
+        stock_codes = [c for c in stock_codes if c in available_codes]
+        if not stock_codes:
+            logger.error("没有可用的股票数据")
+            return {}
+
+        search_space = getattr(config, 'PARAM_SEARCH_SPACE', {})
+        if not search_space:
+            logger.warning("未配置 PARAM_SEARCH_SPACE，跳过参数优化")
+            return {}
+
+        best_params = {}
+
+        for strategy_name, strategy_cfg in config.STRATEGIES.items():
+            stype = strategy_cfg['type']
+            space = search_space.get(stype)
+            if space is None:
+                continue
+
+            cls = STRATEGY_CLASS_MAP.get(stype)
+            if cls is None:
+                continue
+
+            grid = space['grid']
+            constraint = space.get('constraint')
+            param_names = list(grid.keys())
+            param_values = [grid[k] for k in param_names]
+
+            combos = []
+            for vals in product(*param_values):
+                params = dict(zip(param_names, vals))
+                if constraint and not constraint(params):
+                    continue
+                combos.append(params)
+
+            print(f"\n{strategy_name} — 搜索 {len(combos)} 组参数...")
+            results = []
+            for i, params in enumerate(combos):
+                strategy = cls(params)
+                try:
+                    result = self._run_shared_pool(
+                        strategy, all_data, stock_codes,
+                        initial_capital, position_ratio,
+                    )
+                    results.append({
+                        'params': params,
+                        'sharpe': result['sharpe_ratio'],
+                        'annual_return': result['annual_return'],
+                        'max_drawdown_ratio': result['max_drawdown_ratio'],
+                        'total_return': result['total_return'],
+                        'win_rate': result['win_rate'],
+                        'total_trades': result['total_trades'],
+                    })
+                except Exception as e:
+                    logger.warning(f"  参数 {params} 失败: {e}")
+
+                if (i + 1) % 10 == 0:
+                    print(f"  进度 {i + 1}/{len(combos)}")
+
+            if not results:
+                continue
+
+            results.sort(key=lambda r: r['sharpe'], reverse=True)
+            best = results[0]
+            best_params[strategy_name] = best['params']
+
+            print(f"  Top-3:")
+            for rank, r in enumerate(results[:3], 1):
+                param_str = ', '.join(f"{k}={v}" for k, v in r['params'].items())
+                print(f"    #{rank} {param_str}  "
+                      f"年化{r['annual_return']:.2%}  "
+                      f"回撤{r['max_drawdown_ratio']:.2%}  "
+                      f"夏普{r['sharpe']:.3f}")
+            param_str = ', '.join(f"{k}={v}" for k, v in best['params'].items())
+            print(f"  -> 最优: {param_str}")
+
+        return best_params
+
+    def apply_best_params(self, best_params):
+        """用优化后的参数重新初始化策略"""
+        for strategy_name, strategy_cfg in config.STRATEGIES.items():
+            stype = strategy_cfg['type']
+            if strategy_name not in best_params:
+                continue
+            cls = STRATEGY_CLASS_MAP.get(stype)
+            if cls is None:
+                continue
+            self.strategies[strategy_name] = cls(best_params[strategy_name])
+        logger.info("已用最优参数重新初始化策略")
+
 
 def main():
     print("股票回测系统（多股票共享资金池）")
@@ -382,7 +492,22 @@ def main():
     try:
         system.initialize_database()
         system.fetch_data()
+
+        # 参数优化
+        print("\n" + "=" * 50)
+        print("阶段一：参数网格搜索")
+        print("=" * 50)
         system.initialize_strategies()
+        best_params = system.optimize_params()
+
+        if best_params:
+            print("\n" + "=" * 50)
+            print("阶段二：用最优参数正式回测")
+            print("=" * 50)
+            system.apply_best_params(best_params)
+        else:
+            print("\n跳过参数优化，使用默认参数回测")
+
         system.run_backtest()
         report_df = system.generate_report()
         system.visualize()
