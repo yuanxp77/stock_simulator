@@ -14,8 +14,8 @@ import logging
 import os
 import platform
 
-from database import StockDatabase
-from data_generator import StockDataGenerator
+from backtest.database import StockDatabase
+from backtest.data_generator import StockDataGenerator
 from strategies.dual_ma_strategy import DualMAStrategy
 from strategies.bollinger_bands_strategy import BollingerBandsStrategy
 from strategies.rsi_strategy import RSIStrategy

@@ -3,6 +3,7 @@
 """SQLite 数据库操作：建表、写入回测结果、查询"""
 
 import sqlite3
+import os
 from typing import Dict, List
 import logging
 
@@ -24,7 +25,8 @@ class StockDatabase:
     def initialize_database(self):
         """执行 SQL 脚本创建表结构"""
         try:
-            with open('stock_simulator.sql', 'r', encoding='utf-8') as f:
+            sql_path = os.path.join(os.path.dirname(__file__), 'stock_simulator.sql')
+            with open(sql_path, 'r', encoding='utf-8') as f:
                 self.conn.cursor().executescript(f.read())
                 self.conn.commit()
             print("数据库初始化完成")
