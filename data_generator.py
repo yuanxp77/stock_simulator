@@ -6,15 +6,11 @@ import pandas as pd
 from typing import Dict, List, Optional
 import logging
 import time
+import config
 
 logger = logging.getLogger(__name__)
 
-STOCK_NAMES = {
-    '600519': '贵州茅台', '000858': '五粮液', '601318': '中国平安',
-    '600036': '招商银行', '000333': '美的集团', '600276': '恒瑞医药',
-    '601888': '中国中免', '600887': '伊利股份', '000651': '格力电器',
-    '600028': '中国石化',
-}
+STOCK_NAMES = {s['code']: s['name'] for s in config.STOCKS}
 
 
 class StockDataGenerator:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""股票回测系统主程序：获取数据 → 执行回测 → 输出报告"""
+"""股票回测系统主程序：获取数据 → 多股票共享资金池回测 → 输出报告"""
 
 import pandas as pd
 import numpy as np
@@ -20,6 +20,16 @@ from strategies.bollinger_bands_strategy import BollingerBandsStrategy
 from strategies.rsi_strategy import RSIStrategy
 from strategies.turtle_strategy import TurtleStrategy
 from strategies.ma_reversal_strategy import MAReversalStrategy
+import config
+
+
+STRATEGY_CLASS_MAP = {
+    'DualMA': DualMAStrategy,
+    'Bollinger': BollingerBandsStrategy,
+    'RSI': RSIStrategy,
+    'Turtle': TurtleStrategy,
+    'MAReversal': MAReversalStrategy,
+}
 
 
 def _setup_chinese_font():
@@ -52,26 +62,14 @@ class StockBacktestSystem:
 
     # ── 数据获取 ──
 
-    def fetch_data(self, start_date: str = "2020-01-01", end_date: str = None):
-        if end_date is None:
-            end_date = datetime.now().strftime('%Y-%m-%d')
+    def fetch_data(self):
+        start_date = config.START_DATE
+        end_date = config.END_DATE or datetime.now().strftime('%Y-%m-%d')
         logger.info(f"获取真实数据：{start_date} 至 {end_date}")
         os.makedirs("data", exist_ok=True)
 
         generator = StockDataGenerator(start_date, end_date)
-        stock_list = [
-            {'code': '600519', 'name': '贵州茅台'},
-            {'code': '000858', 'name': '五粮液'},
-            {'code': '601318', 'name': '中国平安'},
-            {'code': '600036', 'name': '招商银行'},
-            {'code': '000333', 'name': '美的集团'},
-            {'code': '600276', 'name': '恒瑞医药'},
-            {'code': '601888', 'name': '中国中免'},
-            {'code': '600887', 'name': '伊利股份'},
-            {'code': '000651', 'name': '格力电器'},
-            {'code': '600028', 'name': '中国石化'},
-        ]
-        stock_data = generator.generate_multiple_stocks(stock_list, "data/stock_data.csv")
+        stock_data = generator.generate_multiple_stocks(config.STOCKS, "data/stock_data.csv")
 
         index_data = generator.generate_index_data("沪深300")
         index_data.to_csv("data/index_data.csv", index=False, encoding='utf-8')
@@ -81,50 +79,212 @@ class StockBacktestSystem:
     # ── 策略初始化 ──
 
     def initialize_strategies(self):
-        self.strategies = {
-            '双均线策略': DualMAStrategy({'short_ma': 5, 'long_ma': 20}),
-            '布林带策略': BollingerBandsStrategy({'bb_period': 20, 'bb_std': 2}),
-            'RSI超买超卖策略': RSIStrategy({'rsi_period': 14, 'oversold': 30, 'overbought': 70}),
-            '海龟交易策略': TurtleStrategy({'breakout_period': 20, 'exit_period': 10, 'stop_loss_pct': 0.02}),
-            '简单均线反转策略': MAReversalStrategy({'ma_period': 60, 'volume_change_pct': 0.5}),
-        }
+        for name, cfg in config.STRATEGIES.items():
+            cls = STRATEGY_CLASS_MAP.get(cfg['type'])
+            if cls is None:
+                logger.warning(f"未知策略类型：{cfg['type']}")
+                continue
+            self.strategies[name] = cls(cfg['params'])
         logger.info(f"已初始化 {len(self.strategies)} 个策略")
 
-    # ── 回测执行 ──
+    # ── 多股票共享资金池回测 ──
 
-    def run_backtest(self, stock_code: str = '600519', start_date: str = '2020-01-01',
-                     end_date: str = None, initial_capital: float = 100000.0):
-        if end_date is None:
-            end_date = datetime.now().strftime('%Y-%m-%d')
-        logger.info(f"开始回测：{stock_code}，{start_date} ~ {end_date}")
+    def run_backtest(self):
+        start_date = config.START_DATE
+        end_date = config.END_DATE or datetime.now().strftime('%Y-%m-%d')
+        initial_capital = config.INITIAL_CAPITAL
+        position_ratio = config.POSITION_RATIO
+        stock_codes = [s['code'] for s in config.STOCKS]
+
+        logger.info(f"开始多股票回测：{len(stock_codes)} 只股票，{start_date} ~ {end_date}，资金 {initial_capital}")
 
         try:
-            stock_data = pd.read_csv('data/stock_data.csv', dtype={'stock_code': str})
-            stock_data = stock_data[stock_data['stock_code'] == stock_code]
-            if stock_data.empty:
-                logger.error(f"未找到股票 {stock_code} 的数据")
-                return
-            stock_data['date'] = pd.to_datetime(stock_data['date'])
-            stock_data = stock_data[(stock_data['date'] >= start_date) &
-                                    (stock_data['date'] <= end_date)].sort_values('date')
-            if stock_data.empty:
-                logger.error("指定日期范围内无数据")
-                return
+            all_data = pd.read_csv('data/stock_data.csv', dtype={'stock_code': str})
+            all_data['date'] = pd.to_datetime(all_data['date'])
+            all_data = all_data[(all_data['date'] >= start_date) &
+                                (all_data['date'] <= end_date)].sort_values('date')
         except FileNotFoundError:
             logger.error("数据文件不存在，请先获取数据")
             return
 
-        for name, strategy in self.strategies.items():
-            logger.info(f"回测策略：{name}")
-            try:
-                result = strategy.backtest(stock_data, initial_capital)
-                self.backtest_results[name] = result
-                self._save_result(name, result, start_date, end_date)
-                logger.info(f"策略 {name} 完成")
-            except Exception as e:
-                logger.error(f"策略 {name} 失败：{e}")
+        available_codes = all_data['stock_code'].unique().tolist()
+        missing = set(stock_codes) - set(available_codes)
+        if missing:
+            logger.warning(f"以下股票无数据，跳过：{missing}")
+        stock_codes = [c for c in stock_codes if c in available_codes]
+        if not stock_codes:
+            logger.error("没有可用的股票数据")
+            return
 
-    def _save_result(self, name, result, start_date, end_date):
+        for strategy_name, strategy in self.strategies.items():
+            logger.info(f"回测策略：{strategy_name}（{len(stock_codes)} 只股票）")
+            try:
+                result = self._run_shared_pool(
+                    strategy, all_data, stock_codes,
+                    initial_capital, position_ratio,
+                )
+                result['strategy_name'] = strategy_name
+                self.backtest_results[strategy_name] = result
+                self._save_result(strategy_name, result, start_date, end_date, stock_codes)
+                logger.info(f"策略 {strategy_name} 完成 — 总收益 {result['total_return']:.2%}")
+            except Exception as e:
+                logger.error(f"策略 {strategy_name} 失败：{e}")
+                import traceback
+                traceback.print_exc()
+
+    def _run_shared_pool(self, strategy, all_data, stock_codes,
+                         initial_capital, position_ratio):
+        """
+        多股票共享资金池回测：
+        1. 对每只股票分别计算指标 & 生成信号
+        2. 按日期合并所有股票信号
+        3. 用同一个资金池统一执行交易
+        """
+        # 为每只股票生成信号
+        signals_by_stock = {}
+        for code in stock_codes:
+            stock_df = all_data[all_data['stock_code'] == code].copy().reset_index(drop=True)
+            if stock_df.empty:
+                continue
+            with_indicators = strategy.calculate_indicators(stock_df)
+            signals = strategy.generate_signals(with_indicators)
+            for sig in signals:
+                sig['stock_code'] = code
+            signals_by_stock[code] = signals
+
+        # 合并信号按日期排序
+        all_signals = []
+        for code, sigs in signals_by_stock.items():
+            all_signals.extend(sigs)
+        if not all_signals:
+            return self._empty_result(initial_capital)
+
+        signals_df = pd.DataFrame(all_signals)
+        signals_df['date'] = pd.to_datetime(signals_df['date'])
+        trading_days = sorted(signals_df['date'].unique())
+
+        cash = initial_capital
+        holdings = {}  # stock_code -> {'qty': int, 'cost': float}
+        equity_curve = []
+        trades = []
+        stock_trade_counts = {code: 0 for code in stock_codes}
+
+        for day in trading_days:
+            day_signals = signals_df[signals_df['date'] == day]
+
+            # 先处理卖出信号（回收资金）
+            for _, sig in day_signals.iterrows():
+                code = sig['stock_code']
+                if sig['signal'] == 'SELL' and code in holdings:
+                    h = holdings[code]
+                    price = sig['close']
+                    comm, tax = strategy._calculate_fees(price, h['qty'], '卖出')
+                    profit = h['qty'] * price - h['qty'] * h['cost'] - comm - tax
+                    cash += h['qty'] * price - comm - tax
+                    trades.append({
+                        'date': day, 'stock_code': code, 'type': '卖出',
+                        'price': price, 'quantity': h['qty'], 'profit': profit,
+                    })
+                    stock_trade_counts[code] += 1
+                    del holdings[code]
+
+            # 再处理买入信号
+            for _, sig in day_signals.iterrows():
+                code = sig['stock_code']
+                if sig['signal'] == 'BUY' and code not in holdings:
+                    price = sig['close']
+                    available = cash * position_ratio
+                    qty = int(available / price)
+                    if qty <= 0:
+                        continue
+                    comm, tax = strategy._calculate_fees(price, qty, '买入')
+                    total_cost = qty * price + comm + tax
+                    if total_cost > cash:
+                        continue
+                    cash -= total_cost
+                    holdings[code] = {'qty': qty, 'cost': price}
+                    trades.append({
+                        'date': day, 'stock_code': code, 'type': '买入',
+                        'price': price, 'quantity': qty, 'profit': 0,
+                    })
+
+            # 记录当日权益
+            position_value = 0.0
+            for code, h in holdings.items():
+                code_day = day_signals[day_signals['stock_code'] == code]
+                if not code_day.empty:
+                    position_value += h['qty'] * code_day.iloc[0]['close']
+                else:
+                    last_price = signals_df[(signals_df['stock_code'] == code) &
+                                            (signals_df['date'] <= day)].iloc[-1]['close']
+                    position_value += h['qty'] * last_price
+
+            equity_curve.append({
+                'date': day, 'equity': cash + position_value,
+                'cash': cash, 'position_value': position_value,
+                'num_holdings': len(holdings),
+            })
+
+        # 计算最终权益（未平仓按最后价格计）
+        final_equity = equity_curve[-1]['equity'] if equity_curve else initial_capital
+        total_return = (final_equity - initial_capital) / initial_capital
+
+        first_date = pd.to_datetime(trading_days[0])
+        last_date = pd.to_datetime(trading_days[-1])
+        years = (last_date - first_date).days / 365.25
+        annual_return = (1 + total_return) ** (1 / years) - 1 if years > 0 else 0
+
+        sell_profits = [t['profit'] for t in trades if t['type'] == '卖出']
+        winning = [p for p in sell_profits if p > 0]
+        losing = [p for p in sell_profits if p < 0]
+        win_rate = len(winning) / len(sell_profits) if sell_profits else 0.0
+        avg_win = np.mean(winning) if winning else 0
+        avg_loss = abs(np.mean(losing)) if losing else 0
+        profit_loss_ratio = avg_win / avg_loss if avg_loss > 0 else 0.0
+
+        equity_df = pd.DataFrame(equity_curve)
+        cumulative_max = equity_df['equity'].cummax()
+        drawdown = cumulative_max - equity_df['equity']
+        max_drawdown = drawdown.max()
+        max_drawdown_ratio = (drawdown / cumulative_max).max()
+        equity_returns = equity_df['equity'].pct_change().dropna()
+        volatility = equity_returns.std() * np.sqrt(252) if len(equity_returns) > 0 else 0
+        sharpe_ratio = strategy._calculate_sharpe_ratio(equity_returns)
+
+        return {
+            'initial_capital': initial_capital,
+            'final_equity': final_equity,
+            'total_return': total_return,
+            'annual_return': annual_return,
+            'max_drawdown': max_drawdown,
+            'max_drawdown_ratio': max_drawdown_ratio,
+            'win_rate': win_rate,
+            'profit_loss_ratio': profit_loss_ratio,
+            'total_trades': len(sell_profits),
+            'winning_trades': len(winning),
+            'losing_trades': len(losing),
+            'volatility': volatility,
+            'sharpe_ratio': sharpe_ratio,
+            'trades': trades,
+            'equity_curve': equity_curve,
+            'stock_codes': stock_codes,
+            'stock_trade_counts': stock_trade_counts,
+        }
+
+    def _empty_result(self, initial_capital):
+        return {
+            'initial_capital': initial_capital,
+            'final_equity': initial_capital,
+            'total_return': 0, 'annual_return': 0,
+            'max_drawdown': 0, 'max_drawdown_ratio': 0,
+            'win_rate': 0, 'profit_loss_ratio': 0,
+            'total_trades': 0, 'winning_trades': 0, 'losing_trades': 0,
+            'volatility': 0, 'sharpe_ratio': 0,
+            'trades': [], 'equity_curve': [],
+            'stock_codes': [], 'stock_trade_counts': {},
+        }
+
+    def _save_result(self, name, result, start_date, end_date, stock_codes):
         eq = pd.DataFrame(result['equity_curve'])
         self.db.add_backtest_result(
             strategy_name=name, start_date=start_date, end_date=end_date,
@@ -134,8 +294,10 @@ class StockBacktestSystem:
             total_trades=result['total_trades'], winning_trades=result['winning_trades'],
             losing_trades=result['losing_trades'], sharpe_ratio=result['sharpe_ratio'],
             volatility=result['volatility'], final_equity=result['final_equity'],
-            max_equity=eq['equity'].max(), min_equity=eq['equity'].min(),
-            data_source="akshare真实数据")
+            max_equity=eq['equity'].max() if not eq.empty else result['initial_capital'],
+            min_equity=eq['equity'].min() if not eq.empty else result['initial_capital'],
+            data_source="akshare真实数据",
+            stock_codes=','.join(stock_codes))
 
     # ── 报告 & 可视化 ──
 
@@ -157,7 +319,6 @@ class StockBacktestSystem:
         os.makedirs(output_dir, exist_ok=True)
         df = pd.DataFrame(results)
 
-        # 四宫格：年化收益率、最大回撤、胜率、夏普比率
         fig, axes = plt.subplots(2, 2, figsize=(12, 8))
         metrics = [
             ('annual_return', '年化收益率 (%)', 100),
@@ -173,7 +334,6 @@ class StockBacktestSystem:
         plt.savefig(f"{output_dir}/performance_comparison.png", dpi=300, bbox_inches='tight')
         plt.close()
 
-        # 风险收益散点图
         plt.figure(figsize=(10, 8))
         plt.scatter(df['max_drawdown_ratio'] * 100, df['annual_return'] * 100,
                     s=100, alpha=0.7, c=df['sharpe_ratio'], cmap='viridis')
@@ -192,7 +352,6 @@ class StockBacktestSystem:
         logger.info(f"图表已保存到：{output_dir}")
 
     def get_ranking(self):
-        """按综合评分排序返回策略推荐"""
         if not self.backtest_results:
             return {}
         results = self.db.get_backtest_results()
@@ -211,7 +370,12 @@ class StockBacktestSystem:
 
 
 def main():
-    print("股票回测系统")
+    print("股票回测系统（多股票共享资金池）")
+    print("=" * 50)
+    print(f"股票：{len(config.STOCKS)} 只")
+    print(f"资金：{config.INITIAL_CAPITAL:,.0f}")
+    print(f"时段：{config.START_DATE} ~ {config.END_DATE or '今天'}")
+    print(f"策略：{len(config.STRATEGIES)} 个")
     print("=" * 50)
 
     system = StockBacktestSystem()
@@ -219,12 +383,7 @@ def main():
         system.initialize_database()
         system.fetch_data()
         system.initialize_strategies()
-        system.run_backtest(
-            stock_code='600519',
-            start_date='2020-01-01',
-            end_date=datetime.now().strftime('%Y-%m-%d'),
-            initial_capital=100000.0,
-        )
+        system.run_backtest()
         report_df = system.generate_report()
         system.visualize()
         ranking = system.get_ranking()
@@ -236,6 +395,14 @@ def main():
             print(report_df[['strategy_name', 'annual_return', 'max_drawdown_ratio',
                              'sharpe_ratio', 'win_rate', 'total_trades',
                              'final_equity']].to_string(index=False))
+
+        # 每个策略的多股票交易明细
+        for name, result in system.backtest_results.items():
+            counts = result.get('stock_trade_counts', {})
+            active = {k: v for k, v in counts.items() if v > 0}
+            if active:
+                detail = ', '.join(f"{c}({n}笔)" for c, n in active.items())
+                print(f"\n  {name} 交易分布：{detail}")
 
         if ranking:
             print(f"\n最佳策略：{ranking['best_strategy']}（评分 {ranking['best_score']:.2f}）")

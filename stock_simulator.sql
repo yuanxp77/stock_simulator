@@ -93,7 +93,8 @@ CREATE TABLE backtest_results (
     max_equity REAL NOT NULL DEFAULT 0.0,            -- 最高权益
     min_equity REAL NOT NULL DEFAULT 0.0,            -- 最低权益
     backtest_time DATETIME DEFAULT CURRENT_TIMESTAMP, -- 回测完成时间
-    data_source TEXT                                 -- 数据来源
+    data_source TEXT,                                -- 数据来源
+    stock_codes TEXT                                 -- 参与回测的股票代码（逗号分隔）
 );
 
 -- 创建索引以提高查询性能

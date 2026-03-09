@@ -38,20 +38,21 @@ class StockDatabase:
                             max_drawdown_ratio: float, win_rate: float, profit_loss_ratio: float,
                             total_trades: int, winning_trades: int, losing_trades: int,
                             sharpe_ratio: float, volatility: float, final_equity: float,
-                            max_equity: float, min_equity: float, data_source: str = "akshare") -> int:
+                            max_equity: float, min_equity: float,
+                            data_source: str = "akshare", stock_codes: str = "") -> int:
         sql = """
         INSERT INTO backtest_results
         (strategy_name, start_date, end_date, total_return, annual_return,
          max_drawdown, max_drawdown_ratio, win_rate, profit_loss_ratio,
          total_trades, winning_trades, losing_trades, sharpe_ratio, volatility,
-         final_equity, max_equity, min_equity, data_source, backtest_time)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+         final_equity, max_equity, min_equity, data_source, stock_codes, backtest_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         """
         cursor = self.conn.cursor()
         cursor.execute(sql, (strategy_name, start_date, end_date, total_return, annual_return,
                              max_drawdown, max_drawdown_ratio, win_rate, profit_loss_ratio,
                              total_trades, winning_trades, losing_trades, sharpe_ratio, volatility,
-                             final_equity, max_equity, min_equity, data_source))
+                             final_equity, max_equity, min_equity, data_source, stock_codes))
         self.conn.commit()
         return cursor.rowcount
 
