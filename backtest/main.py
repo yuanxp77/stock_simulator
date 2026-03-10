@@ -13,6 +13,7 @@ from itertools import product
 import logging
 import os
 import platform
+import argparse
 
 from backtest.database import StockDatabase
 from backtest.data_generator import StockDataGenerator
@@ -480,18 +481,40 @@ class StockBacktestSystem:
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--no-fetch', action='store_true', help='跳过数据获取，使用本地缓存')
+    args = parser.parse_args()
+
     print("股票回测系统（多股票共享资金池）")
     print("=" * 50)
     print(f"股票：{len(config.STOCKS)} 只")
     print(f"资金：{config.INITIAL_CAPITAL:,.0f}")
     print(f"时段：{config.START_DATE} ~ {config.END_DATE or '今天'}")
     print(f"策略：{len(config.STRATEGIES)} 个")
+    if args.no_fetch:
+        print("数据：使用本地缓存")
     print("=" * 50)
 
     system = StockBacktestSystem()
     try:
         system.initialize_database()
-        system.fetch_data()
+        cache_file = 'data/stock_data.csv'
+        need_codes = {s['code'] for s in config.STOCKS}
+
+        if not args.no_fetch:
+            system.fetch_data()
+        elif os.path.exists(cache_file):
+            cached = pd.read_csv(cache_file, dtype={'stock_code': str}, usecols=['stock_code'])
+            cached_codes = set(cached['stock_code'].unique())
+            missing = need_codes - cached_codes
+            if missing:
+                logger.warning(f"缓存缺少 {missing}，重新获取数据...")
+                system.fetch_data()
+            else:
+                logger.info("使用本地缓存数据")
+        else:
+            logger.info("本地缓存不存在，获取数据...")
+            system.fetch_data()
 
         # 参数优化
         print("\n" + "=" * 50)

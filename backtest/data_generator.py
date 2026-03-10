@@ -66,12 +66,27 @@ class StockDataGenerator:
             logger.warning(f"  腾讯获取 {code} 失败: {e}")
         return None
 
+    def _fetch_etf(self, code: str) -> Optional[pd.DataFrame]:
+        """ETF 基金日线（东财）"""
+        try:
+            import akshare as ak
+            df = ak.fund_etf_hist_em(symbol=code, period="daily",
+                                     start_date=self._start_fmt, end_date=self._end_fmt, adjust="qfq")
+            if df is not None and not df.empty:
+                df = df.rename(columns={'日期': 'date', '开盘': 'open', '收盘': 'close',
+                                        '最高': 'high', '最低': 'low', '成交量': 'volume'})
+                logger.info(f"  ETF获取 {code} 成功，{len(df)} 条")
+                return df[['date', 'open', 'high', 'low', 'close', 'volume']]
+        except Exception as e:
+            logger.warning(f"  ETF获取 {code} 失败: {e}")
+        return None
+
     # ── 公开接口 ──
 
     def fetch_stock_data(self, code: str) -> Optional[pd.DataFrame]:
-        """按优先级尝试三个数据源，返回统一格式的 DataFrame"""
+        """按优先级尝试股票三个数据源 + ETF 接口，返回统一格式的 DataFrame"""
         logger.info(f"获取 {code} ({self.start_date} ~ {self.end_date})...")
-        for fn in [self._fetch_eastmoney, self._fetch_sina, self._fetch_tencent]:
+        for fn in [self._fetch_eastmoney, self._fetch_sina, self._fetch_tencent, self._fetch_etf]:
             df = fn(code)
             if df is not None and not df.empty:
                 df['stock_code'] = code
@@ -102,8 +117,7 @@ class StockDataGenerator:
 
         combined = pd.concat(all_data, ignore_index=True)
         combined.to_csv(output_file, index=False, encoding='utf-8')
-        print(f"股票数据已保存到: {output_file}")
-        logger.info(f"共 {len(combined)} 条，覆盖 {len(all_data)} 只股票")
+        logger.info(f"数据已保存: {output_file}  共 {len(combined)} 条，覆盖 {len(all_data)} 只股票")
         return combined
 
     def generate_index_data(self, index_name: str = "沪深300", **_) -> pd.DataFrame:

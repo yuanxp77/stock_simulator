@@ -5,11 +5,12 @@
 """
 
 # ── 时间范围 ──
-START_DATE = "2020-01-01"
+START_DATE = "2022-01-01"
 END_DATE = None  # None = 取到今天
 
+
 # ── 资金 ──
-INITIAL_CAPITAL = 100000.0  # 初始资金（所有股票共享同一资金池）
+INITIAL_CAPITAL = 20000.0  # 初始资金（所有股票共享同一资金池）
 POSITION_RATIO = 0.3        # 单次买入仓位比例（占当前可用现金）
 
 # ── 股票列表（拉数据 + 回测都用这个列表）──
@@ -80,4 +81,16 @@ PARAM_SEARCH_SPACE = {
             'volume_change_pct': [0.3, 0.5, 0.7, 1.0],
         },
     },
+}
+
+# ── 等权定投 + 月度再平衡 ──
+REBALANCE = {
+    'stocks': [
+{'code': '601919', 'name': '中远海控'},
+{'code': '000063', 'name': '中兴通讯'},
+{'code': '159819', 'name': '人工智能ETF'},
+{'code': '588000', 'name': '科创50ETF'}
+    ],
+    'monthly_invest': 5000.0,
+    'target_weight': 0.25,
 }
