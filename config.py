@@ -5,7 +5,7 @@
 """
 
 # ── 时间范围 ──
-START_DATE = "2022-01-01"
+START_DATE = "2026-03-01"
 END_DATE = None  # None = 取到今天
 
 
@@ -86,11 +86,13 @@ PARAM_SEARCH_SPACE = {
 # ── 等权定投 + 月度再平衡 ──
 REBALANCE = {
     'stocks': [
-{'code': '601919', 'name': '中远海控'},
-{'code': '000063', 'name': '中兴通讯'},
-{'code': '159819', 'name': '人工智能ETF'},
+{'code': '601088', 'name': '中国神华'},
+{'code': '601398', 'name': '工商银行'},
+{'code': '601728', 'name': '中国电信'},
+{'code': '515080', 'name': '中证红利ETF'},
 {'code': '588000', 'name': '科创50ETF'}
     ],
-    'monthly_invest': 5000.0,
-    'target_weight': 0.25,
+    'monthly_invest': 7000.0,
+    'target_weight': 0.20,
+    'interval_months': 3,       # 每隔几个月再平衡一次（1=每月）
 }

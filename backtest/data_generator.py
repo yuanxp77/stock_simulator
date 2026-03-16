@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""通过 akshare 获取 A 股真实历史行情（东财 → 新浪 → 腾讯 自动 fallback）"""
+"""通过 akshare 获取 A 股/ETF 真实历史行情（东财接口）"""
 
 import pandas as pd
 from typing import Dict, List, Optional
@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 
 STOCK_NAMES = {s['code']: s['name'] for s in config.STOCKS}
 
+_COL_MAP = {'日期': 'date', '开盘': 'open', '收盘': 'close',
+            '最高': 'high', '最低': 'low', '成交量': 'volume'}
+_COLS = ['date', 'open', 'high', 'low', 'close', 'volume']
+
 
 class StockDataGenerator:
 
@@ -21,78 +25,42 @@ class StockDataGenerator:
         self._start_fmt = start_date.replace('-', '')
         self._end_fmt = end_date.replace('-', '')
 
-    # ── 三个数据源 ──
-
-    def _fetch_eastmoney(self, code: str) -> Optional[pd.DataFrame]:
+    def _fetch_stock(self, code: str) -> Optional[pd.DataFrame]:
         try:
             import akshare as ak
             df = ak.stock_zh_a_hist(symbol=code, period="daily",
                                     start_date=self._start_fmt, end_date=self._end_fmt, adjust="qfq")
             if df is not None and not df.empty:
-                df = df.rename(columns={'日期': 'date', '开盘': 'open', '收盘': 'close',
-                                        '最高': 'high', '最低': 'low', '成交量': 'volume'})
-                logger.info(f"  东财获取 {code} 成功，{len(df)} 条")
-                return df[['date', 'open', 'high', 'low', 'close', 'volume']]
+                df = df.rename(columns=_COL_MAP)
+                logger.info(f"  股票获取 {code} 成功，{len(df)} 条")
+                return df[_COLS]
         except Exception as e:
-            logger.warning(f"  东财获取 {code} 失败: {e}")
-        return None
-
-    def _fetch_sina(self, code: str) -> Optional[pd.DataFrame]:
-        try:
-            import akshare as ak
-            prefix = 'sh' if code.startswith('6') else 'sz'
-            df = ak.stock_zh_a_daily(symbol=f"{prefix}{code}",
-                                     start_date=self._start_fmt, end_date=self._end_fmt, adjust="qfq")
-            if df is not None and not df.empty:
-                df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-                logger.info(f"  新浪获取 {code} 成功，{len(df)} 条")
-                return df[['date', 'open', 'high', 'low', 'close', 'volume']]
-        except Exception as e:
-            logger.warning(f"  新浪获取 {code} 失败: {e}")
-        return None
-
-    def _fetch_tencent(self, code: str) -> Optional[pd.DataFrame]:
-        try:
-            import akshare as ak
-            prefix = 'sh' if code.startswith('6') else 'sz'
-            df = ak.stock_zh_a_hist_tx(symbol=f"{prefix}{code}",
-                                       start_date=self._start_fmt, end_date=self._end_fmt, adjust="qfq")
-            if df is not None and not df.empty:
-                df = df.rename(columns={'amount': 'volume'})
-                df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-                logger.info(f"  腾讯获取 {code} 成功，{len(df)} 条")
-                return df[['date', 'open', 'high', 'low', 'close', 'volume']]
-        except Exception as e:
-            logger.warning(f"  腾讯获取 {code} 失败: {e}")
+            logger.debug(f"  股票获取 {code} 失败: {e}")
         return None
 
     def _fetch_etf(self, code: str) -> Optional[pd.DataFrame]:
-        """ETF 基金日线（东财）"""
         try:
             import akshare as ak
             df = ak.fund_etf_hist_em(symbol=code, period="daily",
                                      start_date=self._start_fmt, end_date=self._end_fmt, adjust="qfq")
             if df is not None and not df.empty:
-                df = df.rename(columns={'日期': 'date', '开盘': 'open', '收盘': 'close',
-                                        '最高': 'high', '最低': 'low', '成交量': 'volume'})
+                df = df.rename(columns=_COL_MAP)
                 logger.info(f"  ETF获取 {code} 成功，{len(df)} 条")
-                return df[['date', 'open', 'high', 'low', 'close', 'volume']]
+                return df[_COLS]
         except Exception as e:
-            logger.warning(f"  ETF获取 {code} 失败: {e}")
+            logger.debug(f"  ETF获取 {code} 失败: {e}")
         return None
 
-    # ── 公开接口 ──
-
     def fetch_stock_data(self, code: str) -> Optional[pd.DataFrame]:
-        """按优先级尝试股票三个数据源 + ETF 接口，返回统一格式的 DataFrame"""
+        """尝试股票接口，失败则尝试 ETF 接口"""
         logger.info(f"获取 {code} ({self.start_date} ~ {self.end_date})...")
-        for fn in [self._fetch_eastmoney, self._fetch_sina, self._fetch_tencent, self._fetch_etf]:
+        for fn in [self._fetch_stock, self._fetch_etf]:
             df = fn(code)
             if df is not None and not df.empty:
                 df['stock_code'] = code
                 df['stock_name'] = STOCK_NAMES.get(code, code)
-                return df[['date', 'stock_code', 'stock_name', 'open', 'high', 'low', 'close', 'volume']]
-        logger.error(f"所有接口均无法获取 {code}")
+                return df[['date', 'stock_code', 'stock_name'] + _COLS[1:]]
+        logger.error(f"无法获取 {code}")
         return None
 
     def generate_multiple_stocks(self, stock_list: List[Dict],

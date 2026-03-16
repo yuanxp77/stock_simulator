@@ -85,18 +85,20 @@ def main():
     stocks = rb['stocks']
     monthly_invest = rb['monthly_invest']
     target_weight = rb['target_weight']
+    interval_months = rb.get('interval_months', 1)
     initial_capital = config.INITIAL_CAPITAL
     start_date = config.START_DATE
     end_date = config.END_DATE or datetime.now().strftime('%Y-%m-%d')
 
     stock_names = ', '.join(f"{s['code']}({s['name']})" for s in stocks)
     cache_file = "data/rebalance_data.csv"
+    interval_label = f"每{interval_months}个月" if interval_months > 1 else "每月"
 
-    print("等权定投 + 月度再平衡策略")
+    print(f"等权定投 + {interval_label}再平衡策略")
     print("=" * 60)
     print(f"股票：{stock_names}")
-    print(f"初始资金：{initial_capital:,.0f}  每月定投：{monthly_invest:,.0f}")
-    print(f"目标权重：每只 {target_weight:.0%}")
+    print(f"初始资金：{initial_capital:,.0f}  每期定投：{monthly_invest * interval_months:,.0f}（{monthly_invest:,.0f}/月 × {interval_months}月）")
+    print(f"目标权重：每只 {target_weight:.0%}  再平衡周期：{interval_label}")
     print(f"时段：{start_date} ~ {end_date}")
     if args.no_fetch:
         print("数据：使用本地缓存")
@@ -127,6 +129,7 @@ def main():
     logger.info("开始回测...")
     result = run_rebalance_backtest(
         all_data, stocks, initial_capital, monthly_invest, target_weight,
+        interval_months=interval_months,
     )
 
     inv = result['total_invested']

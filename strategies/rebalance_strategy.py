@@ -28,16 +28,18 @@ def run_rebalance_backtest(
     initial_capital: float,
     monthly_invest: float,
     target_weight: float,
+    interval_months: int = 1,
 ) -> Dict:
     """
-    等权定投 + 月度再平衡回测。
+    等权定投 + 定期再平衡回测。
 
     Args:
         all_data: 含 date/stock_code/open/high/low/close/volume 的 DataFrame
         stocks: [{'code': '601088', 'name': '中国神华'}, ...]
         initial_capital: 初始资金
-        monthly_invest: 每月定投金额
+        monthly_invest: 每期定投金额（按 interval_months 周期投入）
         target_weight: 每只股票目标权重（如 0.25）
+        interval_months: 每隔几个月再平衡一次（1=每月）
     """
     stock_codes = [s['code'] for s in stocks]
     n_stocks = len(stock_codes)
@@ -52,13 +54,18 @@ def run_rebalance_backtest(
 
     # 按月分组，找出每月第一个交易日
     day_series = pd.Series(trading_days)
-    month_first_days = set(
-        day_series.groupby(day_series.apply(lambda d: (d.year, d.month))).first().values
+    month_first_days_all = (
+        day_series.groupby(day_series.apply(lambda d: (d.year, d.month)))
+        .first()
+        .sort_values()
+        .values
     )
+    # 按 interval_months 间隔筛选再平衡日
+    rebalance_days = set(month_first_days_all[::interval_months])
 
     cash = initial_capital
     total_invested = initial_capital
-    holdings = {code: 0 for code in stock_codes}  # code -> qty
+    holdings = {code: 0 for code in stock_codes}
     equity_curve = []
     trades = []
     rebalance_log = []
@@ -82,11 +89,11 @@ def run_rebalance_backtest(
 
         available_codes = [c for c in stock_codes if c in prices]
 
-        do_rebalance = is_first_day or (day in month_first_days and not is_first_day)
+        do_rebalance = is_first_day or (day in rebalance_days and not is_first_day)
 
         if do_rebalance and not is_first_day:
-            cash += monthly_invest
-            total_invested += monthly_invest
+            cash += monthly_invest * interval_months
+            total_invested += monthly_invest * interval_months
 
         if do_rebalance:
             is_first_day = False
